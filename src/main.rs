@@ -1,12 +1,16 @@
 mod api;
 mod cache;
 mod cli;
+mod engine;
+mod entropy;
 mod format;
 mod model;
 mod parser;
 mod resolver;
+mod rules;
 mod scanner;
 mod slop;
+mod taint;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

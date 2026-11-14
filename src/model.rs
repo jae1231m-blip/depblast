@@ -55,7 +55,7 @@ pub enum SlopCategory {
     AiSlop,
 }
 
-/// One finding of the AI slop / vibe-coding security audit.
+/// One finding of the AI slop / security audit.
 #[derive(Debug, Clone, Serialize)]
 pub struct SlopFinding {
     pub file: String,
@@ -68,6 +68,32 @@ pub struct SlopFinding {
     pub detail: String,
     /// Short actionable fix suggestion.
     pub fix_tip: String,
+    /// True when the finding sits in a test/fixture/mock path (v3: severity
+    /// is downgraded to INFO and it renders in a separate section).
+    pub in_test_context: bool,
+}
+
+impl SlopFinding {
+    pub fn new(
+        file: &str,
+        line: usize,
+        category: SlopCategory,
+        severity: &str,
+        rule: &str,
+        detail: impl Into<String>,
+        fix_tip: &str,
+    ) -> Self {
+        SlopFinding {
+            file: file.to_string(),
+            line,
+            category,
+            severity: severity.to_string(),
+            rule: rule.to_string(),
+            detail: detail.into(),
+            fix_tip: fix_tip.to_string(),
+            in_test_context: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,13 +129,18 @@ impl DepGraph {
 }
 
 impl Report {
-    /// Worst severity across dependency hits and slop findings
-    /// (0 = nothing found).
+    /// Worst severity across dependency hits and production slop findings
+    /// (test/mock findings are INFO and never gate the exit code).
     fn worst_severity(&self) -> u8 {
         self.hits
             .iter()
             .map(|h| severity_to_rank(Some(&h.severity)))
-            .chain(self.slop.iter().map(|f| severity_to_rank(Some(&f.severity))))
+            .chain(
+                self.slop
+                    .iter()
+                    .filter(|f| !f.in_test_context)
+                    .map(|f| severity_to_rank(Some(&f.severity))),
+            )
             .max()
             .unwrap_or(0)
     }
@@ -118,7 +149,8 @@ impl Report {
         let threshold = fail_on.map(|s| severity_to_rank(Some(s))).unwrap_or(0);
         if threshold == 0 {
             // Default: fail when anything was found (even UNKNOWN-severity hits).
-            return if self.hits.is_empty() && self.slop.is_empty() { 0 } else { 1 };
+            let production_slop = self.slop.iter().any(|f| !f.in_test_context);
+            return if self.hits.is_empty() && !production_slop { 0 } else { 1 };
         }
         if self.worst_severity() >= threshold {
             1

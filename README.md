@@ -1,11 +1,14 @@
 # depblast
 
-**Dependency vulnerability scanner with source-code blast radius — plus an AI slop & vibe-coding security auditor.**
+**Ultra-fast SAST & dependency vulnerability scanner with source blast radius — AST-based AI slop & vibe-coding security audit.**
 
 depblast resolves your lockfiles/manifests, checks every dependency against the
 [OSV](https://osv.dev) vulnerability database, then traces where vulnerable
 packages are actually *imported* in your code — so you see the real blast
-radius, not just a list of CVEs.
+radius, not just a list of CVEs. Its `--slop` audit (v3) is a low-false-positive
+SAST engine built on **tree-sitter ASTs**, **intra-procedural taint analysis**
+and **Shannon-entropy secret verification** — large repos scan in well under a
+second.
 
 Supported ecosystems:
 
@@ -171,11 +174,37 @@ With `--json`, slop findings appear under the `slop` key:
 
 ### Design notes
 
-- **Low false positives by design:** placeholder-looking values, env-var
-  lookups and commented-out code are skipped; `regex.exec()` is not confused
-  with `child_process.exec()`; the JSX `import React` idiom is not flagged.
-- **Fast:** pure line-based regex passes over source files, no dependency
-  tree parsing, no network access needed for the audit itself.
+#### The v3 SAST engine (low false positives by design)
+
+v3 replaces v2's regex-only matching with a real analysis pipeline in
+`src/engine/`, `src/rules/`, `src/taint.rs` and `src/entropy.rs`:
+
+1. **AST-based analysis** (`tree-sitter` + `tree-sitter-python`): rules match
+   real syntax nodes. A standalone builtin call (`eval(x)`) is flagged, while
+   object-method calls (`session.exec(x)`) are ignored. `from __future__`
+   imports are explicitly whitelisted from unused-import / AI-slop rules.
+2. **Intra-procedural taint analysis**: assignments are tracked within each
+   function scope from untrusted **sources** (`request.*`, `input()`,
+   `sys.argv`, `os.environ`) to dangerous **sinks** (`eval`, `exec`,
+   `subprocess.*` with `shell=True`, `pickle.loads`, `os.system`). A tainted
+   value reaching a sink is `CRITICAL`; hardcoded-literal arguments are
+   downgraded to `LOW`; known sanitizers (`shlex.quote`, `html.escape`,
+   `int()`, ...) clear taint.
+3. **Context-aware path filtering** (`globset`): findings under `tests/`,
+   `**/test_*.py`, `**/fixtures/**`, `**/mock*`, ... are downgraded to `INFO`
+   and isolated in a separate report section — production findings stay clean
+   and never compete with mock data.
+4. **Smart secret detection**: prefix-shaped tokens (`sk-`, `AKIA`, PEM, ...)
+   stay high-confidence, while *generic* credential literals are only reported
+   when a **Shannon entropy** check confirms the value is actually random
+   (and it is not a known dummy value like `dummy`, `changeme`, `test_`,
+   `xxxx`, `12345`).
+5. **Inline suppression**: a `# sast-ignore` comment (parsed from AST comment
+   nodes) on a finding's line — or the line above — silences it.
+6. **Parallel execution**: `ignore::WalkBuilder` (respects `.gitignore`)
+   feeding `rayon` parallel iterators — one AST parse per file, spread across
+   all cores. A full scan of a mid-size repo runs in well under 0.5s.
+
 - **Secrets are never echoed:** findings describe the match but never print
   the credential value.
 

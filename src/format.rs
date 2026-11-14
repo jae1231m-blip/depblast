@@ -1,5 +1,23 @@
-use crate::model::{Report, SlopCategory};
+use crate::model::{Report, SlopCategory, SlopFinding};
 use colored::{ColoredString, Colorize};
+
+fn paint_slop_finding(f: &SlopFinding) -> String {
+    let cat = match f.category {
+        SlopCategory::Secret => "SECRET".red().bold(),
+        SlopCategory::LazyConfig => "LAZY_CONFIG".yellow(),
+        SlopCategory::DangerousSink => "DANGEROUS_SINK".red(),
+        SlopCategory::AiSlop => "AI_SLOP".cyan(),
+    };
+    format!(
+        "  {} {} {}:{} — {}\n    fix: {}\n",
+        cat,
+        paint_severity(&f.severity),
+        f.file,
+        f.line,
+        f.detail,
+        f.fix_tip
+    )
+}
 
 fn paint_severity(s: &str) -> ColoredString {
     match s {
@@ -7,6 +25,7 @@ fn paint_severity(s: &str) -> ColoredString {
         "HIGH" => "HIGH".red(),
         "MEDIUM" => "MEDIUM".yellow(),
         "LOW" => "LOW".green(),
+        "INFO" => "INFO".cyan(),
         _ => "UNKNOWN".white(),
     }
 }
@@ -45,27 +64,28 @@ pub fn render(report: &Report, json: bool) -> String {
         }
     }
 
-    if !report.slop.is_empty() {
+    let (production, test): (Vec<&SlopFinding>, Vec<&SlopFinding>) = report
+        .slop
+        .iter()
+        .partition(|f| !f.in_test_context);
+
+    if !production.is_empty() {
         out.push_str(&format!(
             "\nAI slop & security audit — {} findings:\n",
-            report.slop.len()
+            production.len()
         ));
-        for f in &report.slop {
-            let cat = match f.category {
-                SlopCategory::Secret => "SECRET".red().bold(),
-                SlopCategory::LazyConfig => "LAZY_CONFIG".yellow(),
-                SlopCategory::DangerousSink => "DANGEROUS_SINK".red(),
-                SlopCategory::AiSlop => "AI_SLOP".cyan(),
-            };
-            out.push_str(&format!(
-                "  {} {} {}:{} — {}\n    fix: {}\n",
-                cat,
-                paint_severity(&f.severity),
-                f.file,
-                f.line,
-                f.detail,
-                f.fix_tip
-            ));
+        for f in &production {
+            out.push_str(&paint_slop_finding(f));
+        }
+    }
+
+    if !test.is_empty() {
+        out.push_str(&format!(
+            "\nTest/mock findings (INFO — isolated, do not gate CI) — {} findings:\n",
+            test.len()
+        ));
+        for f in &test {
+            out.push_str(&paint_slop_finding(f));
         }
     }
 

@@ -7,41 +7,15 @@ use std::path::Path;
 use crate::model::{Imported};
 
 /// Directories that never contain first-party source code worth scanning.
-const SKIP_DIRS: &[&str] = &[
+pub(crate) const SKIP_DIRS: &[&str] = &[
     "node_modules", "target", "dist", "build", "out", "vendor",
     ".next", ".nuxt", "venv", ".venv", "__pycache__", ".tox",
     ".mypy_cache", ".pytest_cache", "site-packages", "coverage",
 ];
 
 pub fn collect_source_files(root: &Path) -> Result<Vec<std::path::PathBuf>, anyhow::Error> {
-    // Collect every source file under root (skipping dependency and build dirs).
-    let mut files = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).with_context(|| format!("read dir {}", dir.display()))?;
-        for entry in entries {
-            let entry = entry.with_context(|| format!("read entry in {}", dir.display()))?;
-            let path = entry.path();
-            if path.is_dir() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
-                    stack.push(path);
-                }
-                continue;
-            }
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if is_source_ext(ext) {
-                        files.push(path);
-                    }
-                }
-            }
-        }
-    }
-
-    files.sort();
-    Ok(files)
+    // v3: shared `ignore`-based walker (respects .gitignore, skips deps/build dirs).
+    crate::engine::walk::collect_source_files(root)
 }
 
 pub fn scan(root: &Path, package_filter: Vec<String>) -> Result<(Vec<Imported>, Vec<std::path::PathBuf>), anyhow::Error> {
@@ -117,7 +91,7 @@ pub fn scan(root: &Path, package_filter: Vec<String>) -> Result<(Vec<Imported>, 
     Ok((imports, files))
 }
 
-fn is_source_ext(ext: &str) -> bool {
+pub(crate) fn is_source_ext(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
         "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "c" | "cpp" | "h" | "hpp"

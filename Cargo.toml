@@ -1,6 +1,6 @@
 [package]
 name = "depblast"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Dependency vulnerability scanner: resolves lockfiles, checks CVEs via OSV, and computes blast radius into your source code"
 license = "MIT"
@@ -21,6 +21,11 @@ dirs = "5"
 url = "2"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tree-sitter-python = "0.25.0"
+rayon = "1.12.0"
+ignore = "0.4.34"
+globset = "0.4.21"
+tree-sitter = "0.25"
 
 [profile.release]
 strip = true
