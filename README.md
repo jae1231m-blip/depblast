@@ -20,11 +20,40 @@ extensions (Go, Ruby, PHP, Rust, ...).
 
 ## Install
 
+### One-line install (recommended — no build required)
+
 ```bash
-cargo install --path .
-# or build locally
+curl -fsSL https://raw.githubusercontent.com/jae1231m-blip/depblast/main/install.sh | bash
+```
+
+This downloads the prebuilt binary for your platform (Linux x86_64/aarch64,
+macOS Apple Silicon/Intel) into `~/.local/bin/` and makes it executable.
+
+**Windows:** download `depblast-x86_64-windows.exe` from the
+[latest release](https://github.com/jae1231m-blip/depblast/releases/latest)
+and put it on your `PATH`.
+
+### Manual download
+
+Grab the binary for your platform from
+[Releases](https://github.com/jae1231m-blip/depblast/releases/latest):
+
+```bash
+curl -fsSL -o ~/.local/bin/depblast \
+  https://github.com/jae1231m-blip/depblast/releases/latest/download/depblast-x86_64-linux
+chmod +x ~/.local/bin/depblast
+```
+
+### Build from source (alternative)
+
+```bash
+cargo install --git https://github.com/jae1231m-blip/depblast
+# or clone and build locally
 cargo build --release
 ```
+
+> Note: building from source compiles with LTO and takes a few minutes —
+> prefer the prebuilt binary above.
 
 ## Usage
 
