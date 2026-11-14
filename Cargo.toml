@@ -1,0 +1,27 @@
+[package]
+name = "depblast"
+version = "0.2.0"
+edition = "2021"
+description = "Dependency vulnerability scanner: resolves lockfiles, checks CVEs via OSV, and computes blast radius into your source code"
+license = "MIT"
+repository = "https://github.com/jae1231m-blip/depblast"
+readme = "README.md"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+colored = "2"
+regex = "1"
+walkdir = "2"
+ureq = { version = "2", features = ["json", "tls"] }
+dirs = "5"
+url = "2"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[profile.release]
+strip = true
+lto = true
