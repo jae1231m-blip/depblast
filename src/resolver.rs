@@ -334,6 +334,7 @@ pub async fn resolve(
         cache_status,
         slop: Vec::new(),
         slop_only: false,
+        attack_surface: None,
     })
 }
 

@@ -3,9 +3,11 @@ mod cache;
 mod cli;
 mod engine;
 mod entropy;
-mod format;
+mod framework;
+mod indexer;
 mod model;
 mod parser;
+mod report;
 mod resolver;
 mod rules;
 mod scanner;
@@ -22,7 +24,7 @@ fn main() -> ExitCode {
         let cli = cli::Cli::parse();
         match run(&cli).await {
             Ok(report) => {
-                print!("{}", format::render(&report, cli.json));
+                print!("{}", report::render(&report, &cli));
                 ExitCode::from(report.exit_code(cli.fail_on.as_deref()))
             }
             Err(e) => {
@@ -46,7 +48,7 @@ async fn run(cli: &cli::Cli) -> Result<model::Report, anyhow::Error> {
     // Standalone slop audit: no manifest, no dependency resolution needed.
     if cli.slop_only {
         let files = scanner::collect_source_files(&root)?;
-        let slop = slop::audit(&root, &files);
+        let audit = slop::audit(&root, &files, cli.max_call_depth, cli.rules.as_deref());
         return Ok(model::Report {
             source_dir: root,
             scanned_files: files.len(),
@@ -54,8 +56,9 @@ async fn run(cli: &cli::Cli) -> Result<model::Report, anyhow::Error> {
             vulnerabilities: 0,
             hits: Vec::new(),
             cache_status: model::CacheStatus { queried: 0, used_cached: 0, fetched: 0 },
-            slop,
+            slop: audit.findings,
             slop_only: true,
+            attack_surface: audit.attack_surface,
         });
     }
 
@@ -85,7 +88,9 @@ async fn run(cli: &cli::Cli) -> Result<model::Report, anyhow::Error> {
     .await?;
 
     if slop_enabled {
-        report.slop = slop::audit(&root, &files);
+        let audit = slop::audit(&root, &files, cli.max_call_depth, cli.rules.as_deref());
+        report.slop = audit.findings;
+        report.attack_surface = audit.attack_surface;
     }
 
     Ok(report)

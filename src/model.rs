@@ -52,7 +52,47 @@ pub enum SlopCategory {
     Secret,
     LazyConfig,
     DangerousSink,
+    AccessControl,
     AiSlop,
+}
+
+/// One hop in a cross-file taint trace path.
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceStep {
+    /// `source` | `call` | `sink`
+    pub kind: String,
+    pub file: String,
+    /// 1-based line.
+    pub line: usize,
+    /// Human-readable hop description (`request.args.get`, `fetch(url)`).
+    pub label: String,
+}
+
+impl TraceStep {
+    pub fn source(file: &str, line: usize, label: impl Into<String>) -> Self {
+        TraceStep { kind: "source".into(), file: file.into(), line, label: label.into() }
+    }
+
+    pub fn call(file: &str, line: usize, label: impl Into<String>) -> Self {
+        TraceStep { kind: "call".into(), file: file.into(), line, label: label.into() }
+    }
+
+    pub fn sink(file: &str, line: usize, label: impl Into<String>) -> Self {
+        TraceStep { kind: "sink".into(), file: file.into(), line, label: label.into() }
+    }
+}
+
+/// Attack surface statistics for the summary section.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AttackSurface {
+    /// Total HTTP endpoints discovered by route decorators.
+    pub endpoints: usize,
+    /// State-changing endpoints (POST/PUT/PATCH/DELETE) with no auth.
+    pub unauthenticated_endpoints: usize,
+    /// Call sites that reach external network sinks (requests/httpx/urllib).
+    pub network_sinks: usize,
+    /// Call sites that execute OS commands or code (subprocess/os.system/eval).
+    pub command_sinks: usize,
 }
 
 /// One finding of the AI slop / security audit.
@@ -71,6 +111,9 @@ pub struct SlopFinding {
     /// True when the finding sits in a test/fixture/mock path (v3: severity
     /// is downgraded to INFO and it renders in a separate section).
     pub in_test_context: bool,
+    /// Cross-file taint trace (`Source -> Call -> Sink`), when present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trace: Vec<TraceStep>,
 }
 
 impl SlopFinding {
@@ -92,7 +135,14 @@ impl SlopFinding {
             detail: detail.into(),
             fix_tip: fix_tip.to_string(),
             in_test_context: false,
+            trace: Vec::new(),
         }
+    }
+
+    /// Attach a trace path and return the finding.
+    pub fn with_trace(mut self, trace: Vec<TraceStep>) -> Self {
+        self.trace = trace;
+        self
     }
 }
 
@@ -108,6 +158,9 @@ pub struct Report {
     pub slop: Vec<SlopFinding>,
     /// True when only the slop audit ran (--slop-only).
     pub slop_only: bool,
+    /// Attack surface summary (v4, present when the audit ran).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack_surface: Option<AttackSurface>,
 }
 
 #[derive(Debug, Clone, Serialize)]

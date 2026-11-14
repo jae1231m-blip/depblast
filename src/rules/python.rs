@@ -58,6 +58,26 @@ fn check_call(node: Node, src: &str, tainted: &HashSet<usize>, rel: &str, out: &
             if tainted.contains(&line) {
                 return; // CRITICAL taint finding already covers this call
             }
+            let args_text = node
+                .child_by_field_name("arguments")
+                .and_then(|args| text(args, src))
+                .unwrap_or("");
+            // Restricted globals: `eval(x, {"__builtins__": {}})` is sandboxed
+            // execution — downgrade instead of false-flagging full RCE.
+            if args_text.contains("__builtins__") {
+                out.push(SlopFinding::new(
+                    rel,
+                    line,
+                    SlopCategory::DangerousSink,
+                    "LOW",
+                    "restricted-execution",
+                    format!(
+                        "`{ftext}()` runs with restricted `{{\"__builtins__\": ...}}` globals — sandboxed, downgraded from RCE"
+                    ),
+                    "Keep the restricted globals exactly as they are; an empty `__builtins__` is what makes this safe. Review any change that removes it.",
+                ));
+                return;
+            }
             let literal = node
                 .child_by_field_name("arguments")
                 .map(|args| all_literals(args, 0))
@@ -313,6 +333,12 @@ struct ImportSite {
 }
 
 pub fn unused_imports(tree: &Tree, src: &str, rel: &str, out: &mut Vec<SlopFinding>) {
+    // `__init__.py` / barrel files re-export the public API by design:
+    // `from .app import app` is intentional even though `app` is not used
+    // locally. Exempt them from unused-import rules entirely.
+    if rel.ends_with("__init__.py") {
+        return;
+    }
     let mut sites = Vec::new();
     collect_imports(tree.root_node(), src, &mut sites);
 

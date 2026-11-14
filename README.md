@@ -1,14 +1,14 @@
 # depblast
 
-**Ultra-fast SAST & dependency vulnerability scanner with source blast radius — AST-based AI slop & vibe-coding security audit.**
+**Ultra-fast SAST & dependency vulnerability scanner with source blast radius — cross-file taint analysis, framework-aware audit, SARIF export.**
 
 depblast resolves your lockfiles/manifests, checks every dependency against the
 [OSV](https://osv.dev) vulnerability database, then traces where vulnerable
 packages are actually *imported* in your code — so you see the real blast
-radius, not just a list of CVEs. Its `--slop` audit (v3) is a low-false-positive
-SAST engine built on **tree-sitter ASTs**, **intra-procedural taint analysis**
-and **Shannon-entropy secret verification** — large repos scan in well under a
-second.
+radius, not just a list of CVEs. Its `--slop` audit (v4) is a two-pass,
+**cross-file taint analysis engine** built on tree-sitter ASTs, a global
+symbol table and a dynamic YAML rule engine — rivaling Semgrep-class depth
+while scanning large repos in well under a second.
 
 Supported ecosystems:
 
@@ -174,36 +174,67 @@ With `--json`, slop findings appear under the `slop` key:
 
 ### Design notes
 
-#### The v3 SAST engine (low false positives by design)
+#### The v4 cross-file taint engine (two passes, global symbol table)
 
-v3 replaces v2's regex-only matching with a real analysis pipeline in
-`src/engine/`, `src/rules/`, `src/taint.rs` and `src/entropy.rs`:
+v4 turns the per-file v3 scanner into a repo-wide analysis engine
+(`src/indexer/`, `src/taint/xfile.rs`, `src/rules/taint_rules.rs`,
+`src/framework/`):
 
-1. **AST-based analysis** (`tree-sitter` + `tree-sitter-python`): rules match
-   real syntax nodes. A standalone builtin call (`eval(x)`) is flagged, while
-   object-method calls (`session.exec(x)`) are ignored. `from __future__`
-   imports are explicitly whitelisted from unused-import / AI-slop rules.
-2. **Intra-procedural taint analysis**: assignments are tracked within each
-   function scope from untrusted **sources** (`request.*`, `input()`,
-   `sys.argv`, `os.environ`) to dangerous **sinks** (`eval`, `exec`,
-   `subprocess.*` with `shell=True`, `pickle.loads`, `os.system`). A tainted
-   value reaching a sink is `CRITICAL`; hardcoded-literal arguments are
-   downgraded to `LOW`; known sanitizers (`shlex.quote`, `html.escape`,
-   `int()`, ...) clear taint.
-3. **Context-aware path filtering** (`globset`): findings under `tests/`,
-   `**/test_*.py`, `**/fixtures/**`, `**/mock*`, ... are downgraded to `INFO`
-   and isolated in a separate report section — production findings stay clean
-   and never compete with mock data.
-4. **Smart secret detection**: prefix-shaped tokens (`sk-`, `AKIA`, PEM, ...)
-   stay high-confidence, while *generic* credential literals are only reported
-   when a **Shannon entropy** check confirms the value is actually random
-   (and it is not a known dummy value like `dummy`, `changeme`, `test_`,
-   `xxxx`, `12345`).
-5. **Inline suppression**: a `# sast-ignore` comment (parsed from AST comment
-   nodes) on a finding's line — or the line above — silences it.
-6. **Parallel execution**: `ignore::WalkBuilder` (respects `.gitignore`)
-   feeding `rayon` parallel iterators — one AST parse per file, spread across
-   all cores. A full scan of a mid-size repo runs in well under 0.5s.
+1. **Pass 1 — parallel indexing** (`ignore::WalkBuilder` + `rayon`): every
+   Python/JS/TS file is parsed and a global concurrent `SymbolTable` (DashMap)
+   records dotted module paths, import bindings with aliases (`from utils.net
+   import fetch as get_url`), per-function IR summaries (parameters with
+   annotations, ordered assignment/call/return steps with argument
+   provenance), classes and HTTP endpoints.
+2. **Pass 2 — parallel inter-procedural analysis**: each function's IR is
+   simulated with tainted argument bindings; callees are resolved through the
+   symbol table (aliases, relative imports, `self.method`, suffix fallback)
+   and taint propagates across files up to `--max-call-depth` hops
+   (default 4).
+3. **Full trace paths**: every taint finding carries a structured chain,
+   e.g. `Source (routes.py:15) -> Call (services/fetcher.py:5) ->
+   Sink (utils/http.py:5)`, rendered as a trace tree in text output and as
+   SARIF `codeFlows`.
+4. **Dynamic YAML rule engine** (`serde_yaml` + `include_str!` embedded
+   defaults): rules declare `id`, `severity`, `category`, `languages`,
+   `sources`, `sanitizers`, `sinks`, `message`, `remediation`. Built-in
+   rulesets: SSRF (requests/httpx/urllib/aiohttp), Path Traversal
+   (open/pathlib/send_file/shutil with basename/secure_filename sanitizers),
+   Command & Code Injection (eval/exec/os.system/pickle.loads/subprocess
+   shell=True). Load extra rulesets with `--rules <file-or-dir>`.
+5. **Framework awareness** (`src/framework/`): FastAPI/Flask route decorators
+   are parsed into endpoints; state-changing endpoints (POST/PUT/PATCH/DELETE)
+   without authentication (`Depends(get_current_user)`, `@login_required`,
+   ...) are flagged as broken access control; `Query()/Body()/Form()/File()/
+   UploadFile` parameters are taint sources. An **attack surface summary**
+   (endpoints, unauthenticated count, network sinks, OS command sinks) prints
+   before the findings.
+6. **Precision false-positive suppression**:
+   - `__init__.py` / barrel re-export files are exempt from unused-import.
+   - `eval(x, {"__builtins__": {}})` — restricted globals — is downgraded to
+     `LOW (restricted-execution)` instead of full RCE.
+   - tests/, fixtures/, mocks/, docs/, docs_src/, examples/, tutorials/ are
+     isolated as non-blocking `INFO` findings.
+   - generic credential literals require Shannon entropy > 4.2 (3.8 with
+     symbols) and pass placeholder exclusion (`example`, `dummy`, `changeme`,
+     ...).
+7. **SARIF v2.1.0**: `--format sarif` emits GitHub Code Scanning-compatible
+   output with stable `partialFingerprints` and taint `codeFlows`.
+8. **Sanitizers strip taint along the branch**: `shlex.quote`,
+   `ast.literal_eval`, `os.path.basename`, `secure_filename`, `bleach.clean`,
+   URL validators — a value sanitized before a sink is not reported.
+
+#### The v3 SAST engine (still the per-file backbone)
+
+- **AST rules** (tree-sitter-python): standalone builtin calls (`eval(x)`)
+  flagged, object-method calls (`session.exec(x)`) ignored;
+  `from __future__` imports whitelisted; insecure defaults matched as real
+  keyword arguments / assignments (`verify=False`, `shell=True`,
+  `debug=True`, `0.0.0.0`, CORS wildcards, unsafe `yaml.load`).
+- **Intra-procedural taint** drives sink severity; **inline suppression**
+  via `# sast-ignore` (parsed from AST comment nodes).
+- **Parallel execution**: `ignore::WalkBuilder` (respects `.gitignore`)
+  feeding `rayon` — typical repos scan in well under 0.5s.
 
 - **Secrets are never echoed:** findings describe the match but never print
   the credential value.

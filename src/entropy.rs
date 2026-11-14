@@ -54,11 +54,9 @@ pub fn looks_like_secret(value: &str) -> bool {
     }
     let e = shannon_entropy(v);
     let has_special = v.chars().any(|c| !c.is_ascii_alphanumeric());
-    let has_digit = v.chars().any(|c| c.is_ascii_digit());
-    let threshold = match (has_special, has_digit) {
-        (true, _) => 3.3,
-        (false, true) => 3.8,
-        (false, false) => 4.2,
-    };
+    // v4 threshold (per audit spec): > 4.2 bits for alphanumeric values;
+    // symbol-bearing values get a small allowance because their charset is
+    // already larger (still well above prose-level entropy ~3.0).
+    let threshold = if has_special { 3.8 } else { 4.2 };
     e >= threshold
 }

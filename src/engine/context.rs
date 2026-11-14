@@ -17,6 +17,9 @@ static TEST_PATHS: LazyLock<GlobSet> = LazyLock::new(|| {
         // JS/TS test conventions
         "**/*.test.js", "**/*.test.ts", "**/*.test.tsx", "**/*.test.jsx",
         "**/*.spec.js", "**/*.spec.ts", "**/*.spec.tsx", "**/*_test.go",
+        // Non-production doc / demo trees (v4): findings are informational
+        // and never gate CI.
+        "**/docs/**", "**/docs_src/**", "**/examples/**", "**/tutorials/**",
     ] {
         builder.add(Glob::new(pattern).expect("valid glob"));
     }

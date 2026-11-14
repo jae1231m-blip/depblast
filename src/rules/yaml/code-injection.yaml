@@ -1,0 +1,40 @@
+id: code-injection
+severity: CRITICAL
+category: dangerous_sink
+languages: [python]
+message: "Tainted input reaches execution sink {sink}"
+remediation: "Never feed untrusted data into execution sinks; pass commands as argv lists (no shell=True), validate or strictly parse values first."
+sources:
+  - request.*
+  - input()
+  - os.environ
+  - sys.argv
+  - http-param
+sanitizers:
+  - shlex.quote
+  - quote
+  - shlex_join
+  - shlex.join
+  - ast.literal_eval
+  - literal_eval
+  - html.escape
+  - escape
+  - bleach.clean
+  - clean
+  - secure_filename
+  - int
+  - float
+  - bool
+sinks:
+  - { call: eval }
+  - { call: exec }
+  - { call: compile }
+  - { call: os.system }
+  - { call: os.popen }
+  - { call: pickle.loads }
+  - { call: pickle.load }
+  - { call: subprocess.run, requires: { name: shell, value: "True" } }
+  - { call: subprocess.call, requires: { name: shell, value: "True" } }
+  - { call: subprocess.check_call, requires: { name: shell, value: "True" } }
+  - { call: subprocess.check_output, requires: { name: shell, value: "True" } }
+  - { call: subprocess.Popen, requires: { name: shell, value: "True" } }

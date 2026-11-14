@@ -1,29 +1,109 @@
-//! Slop/sast audit dispatcher (v3).
+//! Slop/sast audit dispatcher (v4): two-pass cross-file engine.
 //!
-//! Python files go through the tree-sitter AST engine (`crate::engine`) which
-//! replaces the v2 regex heuristics; JS/TS files keep the line-based rules
-//! (now with entropy-verified secrets and inline suppression).
+//! Pass 1 indexes every file into a global `SymbolTable` (modules, imports,
+//! function IR, endpoints). Pass 2 runs the cross-file taint engine per rule
+//! in parallel, alongside the v3 per-file AST engine (secrets, insecure
+//! defaults, unused imports) and the legacy JS/TS line rules.
 
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use rayon::prelude::*;
 
 use crate::engine;
-use crate::model::{SlopCategory, SlopFinding};
+use crate::framework;
+use crate::indexer;
+use crate::model::{AttackSurface, SlopCategory, SlopFinding};
 use crate::rules::secrets;
+use crate::rules::taint_rules::RuleRegistry;
+use crate::taint::xfile;
 
 const PY_EXTS: &[&str] = &["py", "pyw"];
 const JS_EXTS: &[&str] = &["js", "ts", "jsx", "tsx", "mjs", "cjs", "vue", "svelte"];
 
-/// Run the audit over an already-collected list of source files, in parallel
-/// across all cores. Returns findings sorted by file, line, then severity
-/// (worst first).
-pub fn audit(root: &Path, files: &[std::path::PathBuf]) -> Vec<SlopFinding> {
+/// Attack surface computed during the audit, returned alongside findings.
+pub struct AuditResult {
+    pub findings: Vec<SlopFinding>,
+    pub attack_surface: Option<AttackSurface>,
+}
+
+/// Run the audit over an already-collected list of source files.
+///
+/// Two passes, both parallel:
+/// 1. Index every file into the global `SymbolTable`.
+/// 2. Cross-file taint per YAML rule + per-file v3 AST engine + framework
+///    access-control analysis.
+pub fn audit(
+    root: &Path,
+    files: &[std::path::PathBuf],
+    max_depth: usize,
+    rules_path: Option<&Path>,
+) -> AuditResult {
+    // ---- Pass 1: global symbol table ----
+    let table = indexer::SymbolTable::build(files, root);
+
+    // Framework analysis: access-control findings + attack surface stats.
+    let (ac_findings, surface) = framework::analyze(&table);
+
+    // ---- Pass 2a: cross-file taint per rule ----
+    let mut registry = RuleRegistry::builtin();
+    if let Some(path) = rules_path {
+        match registry.load_extra(path) {
+            Ok(n) => eprintln!("loaded {n} extra ruleset rule(s) from {}", path.display()),
+            Err(e) => eprintln!("warning: failed to load extra rules: {e:?}"),
+        }
+    }
+    let budget = Arc::new(AtomicUsize::new(200_000));
+    let py_files: Vec<&std::path::PathBuf> = files
+        .iter()
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| PY_EXTS.contains(&e.to_lowercase().as_str()))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    let taint_findings: Vec<SlopFinding> = py_files
+        .par_iter()
+        .flat_map_iter(|path| {
+            let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_string();
+            let mut per_rule = Vec::new();
+            for rule in &registry.rules {
+                // Language gating: rules may restrict themselves to a language.
+                if !rule.languages.is_empty()
+                    && !rule.languages.iter().any(|l| l == "python")
+                {
+                    continue;
+                }
+                let engine = xfile::Engine::new(&table, rule, max_depth, budget.clone());
+                per_rule.extend(engine.analyze_file(&rel));
+            }
+            per_rule
+        })
+        .collect();
+
+    // ---- Pass 2b: per-file v3 engine (AST rules, secrets, unused imports) ----
     let mut findings: Vec<SlopFinding> = files
         .par_iter()
         .filter_map(|path| audit_one(root, path))
         .flatten()
         .collect();
+    // v3's intra-procedural taint findings are superseded by v4's cross-file
+    // engine (same class of issue, richer trace paths).
+    findings.retain(|f| f.rule != "tainted-input-to-sink");
+    findings.extend(taint_findings);
+    findings.extend(ac_findings);
+
+    // Context-aware path filtering: downgrade test/mock findings to INFO.
+    for f in &mut findings {
+        let in_test = engine::context::is_test_path(&f.file);
+        if in_test {
+            f.in_test_context = true;
+            f.severity = "INFO".into();
+        }
+    }
 
     findings.sort_by(|a, b| {
         a.file.cmp(&b.file)
@@ -36,7 +116,10 @@ pub fn audit(root: &Path, files: &[std::path::PathBuf]) -> Vec<SlopFinding> {
     findings.dedup_by(|a, b| {
         a.file == b.file && a.line == b.line && a.rule == b.rule && a.category == b.category
     });
-    findings
+    AuditResult {
+        findings,
+        attack_surface: Some(surface),
+    }
 }
 
 fn audit_one(root: &Path, path: &std::path::PathBuf) -> Option<Vec<SlopFinding>> {
@@ -52,21 +135,12 @@ fn audit_one(root: &Path, path: &std::path::PathBuf) -> Option<Vec<SlopFinding>>
     let content = std::fs::read_to_string(path).ok()?;
     let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_string();
 
-    let mut findings = if is_py {
-        // v3: AST + taint + entropy + suppression engine.
+    let findings = if is_py {
+        // v3: AST + intra taint + entropy + suppression engine.
         engine::analyze_python(&rel, &content)
     } else {
         check_js(&rel, &content, &ext)
     };
-
-    // Context-aware path filtering: downgrade test/mock findings to INFO and
-    // tag them so they render in a separate report section.
-    if engine::context::is_test_path(&rel) {
-        for f in &mut findings {
-            f.in_test_context = true;
-            f.severity = "INFO".into();
-        }
-    }
     Some(findings)
 }
 

@@ -1,0 +1,32 @@
+id: path-traversal
+severity: HIGH
+category: dangerous_sink
+languages: [python]
+message: "User-controlled path reaches {sink} without normalization (path traversal)"
+remediation: "Normalize with os.path.basename()/secure_filename() and verify the resolved path stays inside the intended directory (Path.is_relative_to)."
+sources:
+  - request.*
+  - input()
+  - sys.argv
+  - http-param
+sanitizers:
+  - os.path.basename
+  - basename
+  - secure_filename
+  - shlex.quote
+  - quote
+  - os.path.realpath
+  - realpath
+sinks:
+  - { call: open, arg: first }
+  - { call: Path, arg: first }
+  - { call: pathlib.Path, arg: first }
+  - { call: send_file, arg: first }
+  - { call: os.remove, arg: first }
+  - { call: os.unlink, arg: first }
+  - { call: os.rmdir, arg: first }
+  - { call: shutil.copy, arg: first }
+  - { call: shutil.copyfile, arg: first }
+  - { call: shutil.move, arg: first }
+  - { call: shutil.rmtree, arg: first }
+  - { call: shutil.unpack_archive, arg: first }

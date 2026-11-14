@@ -8,6 +8,10 @@
 //! Sanitizers (`shlex.quote`, `html.escape`, `int()`, ...) clear taint.
 //! The result drives severity: a tainted value reaching a sink is `CRITICAL`,
 //! while a hardcoded literal argument is downgraded to `LOW` by the AST rules.
+//!
+//! v4 adds the cross-file engine in the `xfile` submodule.
+
+pub mod xfile;
 
 use std::collections::HashMap;
 

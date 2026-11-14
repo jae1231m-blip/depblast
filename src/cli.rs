@@ -42,4 +42,16 @@ pub struct Cli {
     /// Run everything: dependency scan + AI slop audit
     #[arg(long)]
     pub all: bool,
+
+    /// Call depth for cross-file taint propagation (v4)
+    #[arg(long, default_value_t = 4, value_name = "DEPTH")]
+    pub max_call_depth: usize,
+
+    /// Extra YAML taint ruleset (file or directory of *.yaml)
+    #[arg(long, value_name = "PATH")]
+    pub rules: Option<std::path::PathBuf>,
+
+    /// Output format for the audit report
+    #[arg(long, value_parser = ["text", "sarif"], default_value = "text")]
+    pub format: String,
 }

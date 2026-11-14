@@ -1,0 +1,42 @@
+id: ssrf
+severity: HIGH
+category: dangerous_sink
+languages: [python]
+message: "User-controlled URL reaches {sink} without host validation (SSRF)"
+remediation: "Validate the URL host against an allow-list before making the request; never pass raw request data straight into an HTTP client."
+sources:
+  - request.*
+  - input()
+  - sys.argv
+  - http-param
+sanitizers:
+  - is_safe_url
+  - validate_url
+  - url_allowed
+  - allowed_host
+  - validate_hostname
+sinks:
+  - { call: requests.get }
+  - { call: requests.post }
+  - { call: requests.put }
+  - { call: requests.delete }
+  - { call: requests.head }
+  - { call: requests.patch }
+  - { call: requests.options }
+  - { call: requests.request }
+  - { call: httpx.get }
+  - { call: httpx.post }
+  - { call: httpx.put }
+  - { call: httpx.delete }
+  - { call: httpx.head }
+  - { call: httpx.patch }
+  - { call: httpx.request }
+  - { call: httpx.stream }
+  - { call: urllib.request.urlopen }
+  - { call: urllib.urlopen }
+  - { call: urllib2.urlopen }
+  - { call: urllib.request.Request }
+  - { call: aiohttp.ClientSession.get }
+  - { call: aiohttp.ClientSession.post }
+  - { call: aiohttp.ClientSession.request }
+  - { call: http.client.HTTPConnection.request }
