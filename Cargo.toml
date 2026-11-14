@@ -19,7 +19,6 @@ walkdir = "2"
 ureq = { version = "2", features = ["json", "tls"] }
 dirs = "5"
 url = "2"
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tree-sitter-python = "0.25.0"
 rayon = "1.12.0"
