@@ -128,7 +128,10 @@ pub fn line_checks(rel: &str, src: &str, out: &mut Vec<SlopFinding>) {
         // token is leaked whether or not the line is commented out).
         for rule in TOKEN_RULES.iter() {
             if let Some(m) = rule.re.find(line) {
-                if is_doc_example(m.as_str()) {
+                if is_doc_example(m.as_str())
+                    || (rule.rule == "embedded-private-key"
+                        && (line.contains("...") || line.contains(".replace(")))
+                {
                     continue;
                 }
                 out.push(SlopFinding::new(

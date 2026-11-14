@@ -40,7 +40,12 @@ pub fn extract(path_rel: &str, src: &str, lang: Lang) -> FileIndex {
         ..Default::default()
     };
     let Some(tree) = parse::parse(lang, src) else { return index };
-    let mut ctx = ExtractCtx { src, index: &mut index };
+    let mut ctx = ExtractCtx {
+        src,
+        index: &mut index,
+        auth_aliases: Vec::new(),
+        router_has_auth: false,
+    };
 
     match lang {
         Lang::Python => walk_py(tree.root_node(), &mut ctx),
@@ -67,6 +72,8 @@ pub fn extract(path_rel: &str, src: &str, lang: Lang) -> FileIndex {
 struct ExtractCtx<'a> {
     src: &'a str,
     index: &'a mut FileIndex,
+    auth_aliases: Vec<String>,
+    router_has_auth: bool,
 }
 
 fn text<'a>(node: Node<'a>, src: &'a str) -> Option<&'a str> {
@@ -80,6 +87,27 @@ fn text<'a>(node: Node<'a>, src: &'a str) -> Option<&'a str> {
 fn walk_py(node: Node, ctx: &mut ExtractCtx) {
     match node.kind() {
         "import_statement" | "import_from_statement" => extract_import_py(node, ctx),
+        "assignment" => {
+            if let (Some(left), Some(right)) =
+                (node.child_by_field_name("left"), node.child_by_field_name("right"))
+            {
+                if let (Some(lhs), Some(rhs)) = (text(left, ctx.src), text(right, ctx.src)) {
+                    if rhs.contains("Annotated[")
+                        && (rhs.contains("Depends(")
+                            || rhs.contains("get_current_")
+                            || rhs.contains("auth"))
+                    {
+                        ctx.auth_aliases.push(lhs.trim().to_string());
+                    }
+                    if rhs.contains("APIRouter(")
+                        && rhs.contains("dependencies=")
+                        && rhs.contains("Depends(")
+                    {
+                        ctx.router_has_auth = true;
+                    }
+                }
+            }
+        }
         "decorated_definition" => {
             extract_decorated_py(node, ctx);
             return; // the inner definition is handled here — don't re-extract
@@ -215,8 +243,9 @@ fn extract_decorated_py(node: Node, ctx: &mut ExtractCtx) {
         let deco: Node = *deco;
         let method = http_decorator_method(deco, ctx.src).unwrap_or_default();
         let path = decorator_route_path(deco, ctx.src);
-        let authenticated = decorators.iter().any(|d| decorator_has_auth(*d, ctx.src))
-            || func_has_auth_hint(f, ctx.src);
+        let authenticated = ctx.router_has_auth
+            || decorators.iter().any(|d| decorator_has_auth(*d, ctx.src))
+            || func_has_auth_hint(f, ctx.src, &ctx.auth_aliases);
         let func_name = f
             .child_by_field_name("name")
             .and_then(|n| text(n, ctx.src))
@@ -243,6 +272,10 @@ fn http_decorator_method(deco: Node, src: &str) -> Option<String> {
     }
     let func = call.child_by_field_name("function")?;
     let ftext = text(func, src)?;
+    // Must be a method on a router/app object (e.g. `@router.patch`), not bare `@patch` from unittest.mock
+    if !ftext.contains('.') || ftext.ends_with("mock.patch") {
+        return None;
+    }
     let last = ftext.rsplit('.').next()?;
     if last == "route" {
         // @app.route("/x", methods=["POST"])
@@ -301,13 +334,14 @@ fn decorator_has_auth(deco: Node, src: &str) -> bool {
 
 /// Auth hint in the function signature: `Depends(...)` annotations or a
 /// `current_user` / `token` parameter.
-fn func_has_auth_hint(f: Node, src: &str) -> bool {
+fn func_has_auth_hint(f: Node, src: &str, auth_aliases: &[String]) -> bool {
     let Some(params) = f.child_by_field_name("parameters") else { return false };
     let Some(t) = text(params, src) else { return false };
     t.contains("Depends(")
         || t.contains("current_user")
         || t.contains("get_current_user")
         || t.contains("token")
+        || auth_aliases.iter().any(|alias| !alias.is_empty() && t.contains(alias.as_str()))
 }
 
 fn extract_function_py(node: Node, class: Option<&str>, ctx: &mut ExtractCtx) {
